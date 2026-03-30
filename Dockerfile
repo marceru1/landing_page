@@ -10,8 +10,9 @@ RUN apt-get update && apt-get install -y \
     sqlite3 \
     libsqlite3-dev \
     libzip-dev \
+    libicu-dev \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install pdo pdo_sqlite pdo_mysql gd zip opcache
+    && docker-php-ext-install pdo pdo_sqlite pdo_mysql gd zip opcache bcmath intl
 
 # 2. Ativar módulo mod_rewrite do Apache para as rotas do Laravel funcionarem
 RUN a2enmod rewrite
@@ -23,6 +24,8 @@ RUN sed -ri -e 's!/var/www/!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/apache2.conf
 
 # 4. Instalar o Composer (gerenciador de dependências PHP)
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+ENV COMPOSER_ALLOW_SUPERUSER=1 \
+    COMPOSER_MEMORY_LIMIT=-1
 
 # 5. Definir o diretório de trabalho
 WORKDIR /var/www/html
