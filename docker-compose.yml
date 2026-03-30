@@ -13,6 +13,7 @@ services:
       - QUEUE_CONNECTION=sync
       - APP_ENV=production
       - APP_DEBUG=false
+      - APP_KEY=base64:+L3LK9aqJPnHKVS2or8u+P6uGZyd+o8gcGAKQYsYMRs=
       - APP_URL=https://grupo20mais.com.br
       - APP_TIMEZONE=America/Manaus
       - TZ=America/Manaus
