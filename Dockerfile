@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y \
     libsqlite3-dev \
     libzip-dev \
     libicu-dev \
+    nodejs \
+    npm \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install pdo pdo_sqlite pdo_mysql gd zip opcache bcmath intl
 
@@ -36,6 +38,9 @@ COPY . /var/www/html/
 
 # 7. Instalar dependências PHP ignorando as de desenvolvimento (melhor para produção)
 RUN composer install --no-dev --optimize-autoloader --no-interaction
+
+# 8. Compilar os assets do frontend com Vite (gera o public/build/manifest.json)
+RUN npm ci && npm run build && rm -rf node_modules
 
 # 8. Copiar o script de inicialização e dar permissão de execução
 COPY docker-entrypoint.sh /usr/local/bin/
