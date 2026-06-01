@@ -1,100 +1,138 @@
-# 🚀 Guia de Implantação e Proxy Reverso (Nginx + Docker)
+# 🚀 Guia de Deploy — Landing Page + Odoo (Windows Server 2022)
 
-## 1. Como Subir a Landing Page com HTTPS (Configuração Atual)
+## Arquitetura Atual
 
-Este é o roteiro completo para você rodar no seu servidor Windows Server (onde as portas 80/443 estão liberadas). A nossa infraestrutura atual já suporta o proxy reverso e SSL via Certbot.
+```
+Internet → Nginx (porta 80/443) → Landing Page (Apache container)
+Internet → Nginx (porta 80/443) → Odoo (host Windows, porta 8069)
+```
 
-### Passo 1: Iniciar os Contêineres (Fase 1 - HTTP)
-1. Acesse o seu servidor.
-2. Navegue até a pasta da landing page via terminal:
-   `cd /caminho-ate-o/landing_page`
-3. Baixe/atualize as mudanças do Github (se necessário):
-   `git pull`
-4. Suba todos os serviços em segundo plano:
-   `docker compose up -d --build`
-
-Isso já fará com que o Roteador redirecione o tráfego HTTP porta 80 do mundo e o direcione para a nossa tela (com o bônus de segurança administrativa implementado).
-
-### Passo 2: Gerar Certificado SSL (Let's Encrypt)
-Com a Landing Page respondendo na porta 80 externa, execute o Certbot para validar o domínio. **Na mesma pasta**, rode:
-
-`docker compose run --rm certbot certonly --webroot -w /var/www/certbot -d grupo20mais.com.br -m seu-email@dominio.com --agree-tos`
-
-*(O Certbot vai gerar um alerta de Sucesso e guardar as chaves SSL nas pastas corretas de volume que já pré-configuramos).*
-
-### Passo 3: Ativar a Segurança HTTPS (Fase 2)
-Após gerar o certificado com sucesso:
-1. Abra o código do Nginx em: `docker/nginx/nginx.conf`
-2. **Desabilite** o bloco de `server` sob a marcação "Fase 1" (comentando cada linha com `#`).
-3. **Habilite** os dois blocos de `server` sob "Fase 2" (removendo os `#` do começo de cada linha).
-4. Salve o arquivo Nginx.
-
-### Passo 4: Recarregar o Proxy
-Sem derrubar a infraestrutura, informe ao Nginx a nova configuração HTTPS (rode direto do terminal da pasta `landing_page`):
-
-`docker compose exec nginx nginx -s reload`
-
-PRONTO! A Landing Page funcionará exclusivamente em rotas protegidas por Cadeado SSL, com seu Admin Dashboard blindado de invasões externas!
+| Serviço | Container | Domínio |
+|---------|-----------|---------|
+| Landing Page | `grupo20mais.com.br` | https://grupo20mais.com.br |
+| Nginx Proxy | `proxy_nginx` | — |
+| Certbot SSL | `proxy_certbot` | — |
+| Odoo ERP | Roda no host Windows | https://odoo.grupo20mais.com.br |
 
 ---
 
-## 2. Plano de Implementação Futura: Subdomínio Odoo ERP
+## ⚠️ REGRAS DE OURO (LEIA ANTES DE QUALQUER COISA)
 
-> **O cenário do Odoo**: Ele já se encontra funcionando perfeitamente no IP Fixo e na porta **8069**, aberto de forma direta na web. A ideia deste plano é colocá-lo atrás das grades e proteções do nosso Proxy Reverso recém-criado, com HTTPS gratuito!
+### 1. NUNCA rode `docker compose down` sem necessidade
+- O `docker compose down` **destrói** os containers e pode apagar os volumes dos certificados SSL.
+- Para reiniciar serviços, use `docker compose restart web` ou `docker compose up -d --build web`.
 
-### Objetivo
-Passar a utilizar o subdomínio `odoo.grupo20mais.com.br` sob Certificado SSL (443), acatando o fluxo de dados via Nginx antes de repassar para o Odoo em back-end (8069).
+### 2. Rebuilde APENAS o serviço `web`
+- Quando fizer mudanças no código, rode **APENAS**:
+  ```bash
+  docker compose up -d --build web
+  ```
+- Isso reconstrói **só** o container da landing page sem tocar no Nginx nem nos certificados.
+- **NUNCA** rode `docker compose up -d --build` (sem especificar `web`), pois ele pode recriar o Nginx e perder a config ativa.
 
-### Checklist de Implementação 
-1. **Configuração de DNS**: 
-   Acessar o seu provedor (Registro.br / Cloudflare) e associar uma nova entrada "Tipo A" (ou "CNAME") para o ponteiro `odoo`, apontando para o *mesmo IP Fixo* do seu Windows Server.
+### 3. Mudanças no Nginx: apenas reload
+- Se editar o `docker/nginx/nginx.conf`, **NÃO** rebuilde o Nginx.
+- Rode apenas:
+  ```bash
+  docker compose exec nginx nginx -s reload
+  ```
 
-2. **Reconfiguração do Roteador / Firewall (Recomendado de Segurança)**:
-   Bloquear ou despublicar a porta nativa de redirecionamento "8069" do seu provedor para a internet, mantendo o NAT público trabalhando **exclusivamente** nas portas 80 e 443 do docker. *Isso força com que 100% de conexões externas e curiosos precisem passar pela interceptação TLS/SSL do proxy reverso, ocultando infraestrutura e garantindo segurança extrema.*
+### 4. Certificados SSL vivem em volumes Docker
+- Os certificados estão em volumes nomeados (`certbot-www` e `certbot-conf`), **NÃO** em pastas do Windows.
+- Isso é proposital: o Windows corrompe symlinks do Linux. Nunca mude isso para bind mounts.
 
-3. **Inclusão do Subdomínio no Nginx**:
-   Embaixo de todo o conteúdo da Fase 2 existente no `docker/nginx/nginx.conf`, abriremos a Fase 3 (Odoo), interceptando requisições com o cabeçalho novo:
-   ```nginx
-   # FASE 3: REDIRECIONANDO PARA O ODOO INTERNO NO MESMO SERVIDOR
-   server {
-       listen 80;
-       server_name odoo.grupo20mais.com.br;
-       
-       location /.well-known/acme-challenge/ {
-           root /var/www/certbot;
-       }
+### 5. Certbot: cuidado com o entrypoint
+- Para gerar/renovar certificados manualmente, use `--entrypoint ""`:
+  ```bash
+  docker compose run --rm --entrypoint "" certbot certbot certonly --webroot -w /var/www/certbot -d DOMINIO -m EMAIL --agree-tos
+  ```
+- Sem o `--entrypoint ""`, o Docker ignora seu comando e roda o loop de renovação automática.
 
-       location / {
-           return 301 https://$host$request_uri;
-       }
-   }
+---
 
-   server {
-       listen 443 ssl;
-       server_name odoo.grupo20mais.com.br;
+## 🔁 Fluxo de Trabalho Diário
 
-       # (Certificados com a URL do odoo)
-       ssl_certificate     /etc/letsencrypt/live/odoo.grupo20mais.com.br/fullchain.pem;
-       ssl_certificate_key /etc/letsencrypt/live/odoo.grupo20mais.com.br/privkey.pem;
+### Mudanças de Código (PHP, Blade, CSS, JS)
 
-       # Reuso de ssl_protocols...
-       
-       # Em tese, como o Nginx no Docker alcança diretamente as portas expostas da Maquina Física Windows (localhost),
-       # Apontaremos para o próprio Server Windows resolvendo a porta nativa do Odoo:
-       location / {
-           proxy_pass http://host.docker.internal:8069;
-           
-           proxy_set_header Host $host;
-           proxy_set_header X-Real-IP $remote_addr;
-           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-           proxy_set_header X-Forwarded-Proto $scheme;
-       }
-   }
-   ```
+```
+[Mac] Edita o código
+   ↓
+[Mac] npm run build          ← SE mexeu em CSS/JS
+   ↓
+[Mac] git add . && git commit -m "mensagem" && git push
+   ↓
+[Servidor] git pull
+   ↓
+[Servidor] docker compose up -d --build web
+```
 
-4. **Gerar Segundo Certificado SSL**:
-   Assim que o DNS do subdomínio odoo já responder pro seu IP, voltaremos ao servidor na pasta do projeto e rodaremos o Certbot de novo, apenas mudando o nome do domínio solicitado `-d`:
-   `docker compose run --rm certbot certonly --webroot -w /var/www/certbot -d odoo.grupo20mais.com.br -m seu-email@exemplo.com --agree-tos`
+### Tabela Rápida: Tipo de Mudança vs. Comando
 
-5. **Recarregar o Nginx novamente**:
-   `docker compose exec nginx nginx -s reload`
+| Mudança | Precisa `npm run build`? | Comando no Servidor |
+|---------|--------------------------|---------------------|
+| PHP / Blade (textos, lógica) | Não | `docker compose up -d --build web` |
+| CSS / JS (estilos, animações) | **Sim** | `docker compose up -d --build web` |
+| Nginx (rotas, headers, subdomínios) | Não | `docker compose exec nginx nginx -s reload` |
+| Variáveis de ambiente | Não | `docker compose up -d --force-recreate web` |
+| Banco de dados / Migrations | Não | `docker compose up -d --build web` (entrypoint roda migrate automaticamente) |
+
+---
+
+## 🔒 Configuração SSL (Já Feita)
+
+### Certificados Ativos
+- `grupo20mais.com.br` + `www.grupo20mais.com.br` → expira 28/06/2026
+- `odoo.grupo20mais.com.br` → expira 28/06/2026
+
+### Renovação Automática
+O container `proxy_certbot` roda `certbot renew` a cada 12h automaticamente.
+
+### Renovação Manual (se necessário)
+```bash
+docker compose run --rm --entrypoint "" certbot certbot renew
+docker compose exec nginx nginx -s reload
+```
+
+---
+
+## 📋 Nginx — Fases do Arquivo `docker/nginx/nginx.conf`
+
+| Fase | Status | Função |
+|------|--------|--------|
+| FASE 1 | **Comentada** | HTTP puro (só para gerar certificados iniciais) |
+| FASE 2 | **Ativa** | Landing Page com HTTPS + bloqueio admin |
+| FASE 3 | **Ativa** | Odoo ERP com HTTPS via proxy reverso |
+
+### Para reativar a Fase 1 (emergência / novo certificado)
+1. Descomente a Fase 1 e comente as Fases 2 e 3
+2. `docker compose exec nginx nginx -s reload`
+3. Gere o certificado necessário
+4. Reverta: comente Fase 1, descomente Fases 2 e 3
+5. `docker compose exec nginx nginx -s reload`
+
+---
+
+## 🛡️ Segurança
+
+### Rotas Bloqueadas ao Acesso Externo
+As rotas `/login`, `/register`, `/dashboard` só são acessíveis de dentro da rede local (192.168.x.x, 10.x.x.x, 172.16.x.x).
+
+### Registro de Usuários
+Desabilitado via código. Rotas de `/register` retornam 404. Para reativar, descomente as linhas em `routes/auth.php`.
+
+### Variáveis Sensíveis
+- `APP_KEY` está definida no `docker-compose.yml` (environment)
+- `.env` **NÃO** vai para o container (está no `.dockerignore`)
+
+---
+
+## 🆘 Troubleshooting
+
+| Problema | Causa Provável | Solução |
+|----------|---------------|---------|
+| 500 Server Error | Falta `APP_KEY` ou Vite manifest | Checar `docker compose logs web --tail=20` |
+| CSS/JS não carregam | Mixed content (HTTP/HTTPS) | Verificar se `trustProxies` está ativo em `bootstrap/app.php` |
+| Certificado não encontrado | Volumes corrompidos ou inexistentes | Regerar com `--entrypoint ""` |
+| `No renewals were attempted` | Certbot usando entrypoint errado | Usar `--entrypoint ""` no comando |
+| Nginx não recarrega | Erro de sintaxe no conf | `docker compose exec nginx nginx -t` para testar config |
+| Odoo não abre via subdomínio | Porta 8069 fechada no Windows Firewall | Verificar firewall do host |
